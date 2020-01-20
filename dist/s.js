@@ -146,7 +146,7 @@
 
   systemJSPrototype.prepareImport = function () {};
 
-  systemJSPrototype.import = function (id, parentUrl) {
+  systemJSPrototype.import = function (id, parentUrl, delayExecution = false) {
     const loader = this;
     return Promise.resolve(loader.prepareImport())
     .then(function() {
@@ -154,8 +154,19 @@
     })
     .then(function (id) {
       const load = getOrCreateLoad(loader, id);
-      return load.C || topLevelLoad(loader, load);
+      return load.C || topLevelLoad(loader, load, delayExecution);
     });
+  };
+
+  systemJSPrototype.execute = function (load) {
+    const loader = this;
+    return Promise.resolve(load.C)
+      .then(function () {
+        return postOrderExec(loader, load, {});
+      })
+      .then(function () {
+        return load.n;
+      });
   };
 
   // Hookable createContext function -> allowing eg custom import meta
@@ -315,14 +326,19 @@
     }
   }
 
-  function topLevelLoad (loader, load) {
-    return load.C = instantiateAll(loader, load, {})
-    .then(function () {
-      return postOrderExec(loader, load, {});
-    })
-    .then(function () {
-      return load.n;
-    });
+  function topLevelLoad (loader, load, delayExecution) {
+    load.C = instantiateAll(loader, load, {});
+    if (!delayExecution) {
+      return load.C.then(function () {
+          return postOrderExec(loader, load, {});
+        })
+        .then(function () {
+          return load.n;
+        });
+    }
+
+    // Return load if execution is delayed
+    return load;
   }
 
   // the closest we can get to call(undefined)
@@ -435,11 +451,34 @@
   }
 
   function loadScriptModules() {
+    let moduleIds = [];
+
     Array.prototype.forEach.call(
       document.querySelectorAll('script[type=systemjs-module]'), function (script) {
         if (script.src) {
-          System.import(script.src.slice(0, 7) === 'import:' ? script.src.slice(7) : resolveUrl(script.src, baseUrl));
+          moduleIds.push(script.src.slice(0, 7) === 'import:' ? script.src.slice(7) : resolveUrl(script.src, baseUrl));
         }
+      });
+
+    let loadPromises = moduleIds.map(id => {
+      return System.import(id, undefined, true);
+    });
+
+    Promise.all(loadPromises)
+      .then(loads => {
+        // Since I changed the topLevelLoad function to return the load
+        // object when delayExecution = true, loads should be an array
+        // of load objects.
+
+        // Need to wait for all modules to be instantiated.
+        return Promise.all(loads.map(load => load.C))
+          .then(() => {
+            loads.reduce((promise, load) => {
+              return promise.then(() => {
+                return System.execute(load);
+              });
+            }, Promise.resolve());
+          });
       });
   }
 

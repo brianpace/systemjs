@@ -53,10 +53,33 @@ if (hasDocument) {
 }
 
 function loadScriptModules() {
+  let moduleIds = [];
+
   Array.prototype.forEach.call(
     document.querySelectorAll('script[type=systemjs-module]'), function (script) {
       if (script.src) {
-        System.import(script.src.slice(0, 7) === 'import:' ? script.src.slice(7) : resolveUrl(script.src, baseUrl));
+        moduleIds.push(script.src.slice(0, 7) === 'import:' ? script.src.slice(7) : resolveUrl(script.src, baseUrl));
       }
+    });
+
+  let loadPromises = moduleIds.map(id => {
+    return System.import(id, undefined, true);
+  });
+
+  Promise.all(loadPromises)
+    .then(loads => {
+      // Since the topLevelLoad function was changed to return the load
+      // object when delayExecution = true, loads should be an array
+      // of load objects.
+
+      // Need to wait for all modules to be instantiated.
+      return Promise.all(loads.map(load => load.C))
+        .then(() => {
+          loads.reduce((promise, load) => {
+            return promise.then(() => {
+              return System.execute(load);
+            });
+          }, Promise.resolve());
+        });
     });
 }

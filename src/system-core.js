@@ -29,7 +29,7 @@ const systemJSPrototype = SystemJS.prototype;
 
 systemJSPrototype.prepareImport = function () {};
 
-systemJSPrototype.import = function (id, parentUrl) {
+systemJSPrototype.import = function (id, parentUrl, delayExecution = false) {
   const loader = this;
   return Promise.resolve(loader.prepareImport())
   .then(function() {
@@ -37,9 +37,20 @@ systemJSPrototype.import = function (id, parentUrl) {
   })
   .then(function (id) {
     const load = getOrCreateLoad(loader, id);
-    return load.C || topLevelLoad(loader, load);
+    return load.C || topLevelLoad(loader, load, delayExecution);
   });
 };
+
+systemJSPrototype.execute = function (load) {
+  const loader = this;
+  return Promise.resolve(load.C)
+    .then(function () {
+      return postOrderExec(loader, load, {});
+    })
+    .then(function () {
+      return load.n;
+    });
+}
 
 // Hookable createContext function -> allowing eg custom import meta
 systemJSPrototype.createContext = function (parentId) {
@@ -215,14 +226,19 @@ function instantiateAll (loader, load, loaded) {
   }
 }
 
-function topLevelLoad (loader, load) {
-  return load.C = instantiateAll(loader, load, {})
-  .then(function () {
-    return postOrderExec(loader, load, {});
-  })
-  .then(function () {
-    return load.n;
-  });
+function topLevelLoad (loader, load, delayExecution) {
+  load.C = instantiateAll(loader, load, {});
+  if (!delayExecution) {
+    return load.C.then(function () {
+        return postOrderExec(loader, load, {});
+      })
+      .then(function () {
+        return load.n;
+      });
+  }
+
+  // Return load if execution is delayed
+  return load;
 }
 
 // the closest we can get to call(undefined)
